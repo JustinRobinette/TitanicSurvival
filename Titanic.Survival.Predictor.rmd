@@ -71,6 +71,15 @@ combined.dat$FamilySize = combined.dat$SibSp + combined.dat$Parch + 1
 ggplot(combined.dat[1:891,], aes(x = FamilySize, fill = factor(Survived))) +
   geom_bar(stat = "count", position = "dodge") +
   labs(y = "Number of Passengers")
+
+# added solo factor because that seems to be biggest predictor
+combined.dat$Solo <- ifelse(combined.dat$FamilySize == 1, "Solo", "Not Solo")
+combined.dat$Solo <- as.factor(combined.dat$Solo)
+
+# solo passengers had a disproportionate chance of success
+ggplot(combined.dat[1:891,], aes(x = Solo, fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
 ```
 
 ```{r}
@@ -156,10 +165,33 @@ combined.dat$SexAdult[combined.dat$Age >= 18 & combined.dat$Sex == "male"] <- "M
 combined.dat$SexAdult[combined.dat$Age < 18 & combined.dat$Sex == "female"] <- "Female Child"
 combined.dat$SexAdult[combined.dat$Age < 18 & combined.dat$Sex == "male"] <- "Male Child"
 
-# we see male adults had the least chance of survival whereas female adults show the biggest difference in favor of survival
-ggplot(combined.dat[1:891,], aes(x = SexAdult, fill = factor(Survived))) +
+# broke SexAdult in to Male / Female Adult and Child / Not Child
+combined.dat$MaleAdult <- ifelse(combined.dat$SexAdult == "Male Adult", 1, 0)
+combined.dat$FemaleAdult <- ifelse(combined.dat$SexAdult == "Female Adult", 1, 0)
+combined.dat$Child <- ifelse(combined.dat$Age < 18, 1, 0)
+
+# added a mother category to investigate the impact of survival
+combined.dat$Mother <- ifelse(combined.dat$FemaleAdult == 1 & combined.dat$Parch > 0, 1, 0)
+
+#each of the below graphs appear to provide significance in predicting survival
+maleadult.plot <-
+  ggplot(combined.dat[1:891,], aes(x = MaleAdult, fill = factor(Survived))) +
   geom_bar(stat = "count", position = "dodge") +
   labs(y = "Number of Passengers")
+femaleadult.plot <- 
+  ggplot(combined.dat[1:891,], aes(x = FemaleAdult, fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+child.plot <- 
+  ggplot(combined.dat[1:891,], aes(x = Child, fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+mother.plot <- 
+  ggplot(combined.dat[1:891,], aes(x = Mother, fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+
+grid.arrange(maleadult.plot, femaleadult.plot, child.plot, mother.plot, ncol = 2)
 ```
 
 ```{r}
@@ -168,7 +200,12 @@ combined.dat$Sex <- as.factor(combined.dat$Sex)
 combined.dat$Embarked <- as.factor(combined.dat$Embarked)
 combined.dat$Title <- as.factor(combined.dat$Title)
 combined.dat$Deck <- as.factor(combined.dat$Deck)
-combined.dat$SexAdult <- as.factor(combined.dat$SexAdult)
+combined.dat$Child <- as.factor(combined.dat$Child)
+```
+
+```{r}
+# now that we've split this column into 3 separate factors, we don't need it
+combined.dat$SexAdult <- NULL
 ```
 
 ```{r}
@@ -181,8 +218,8 @@ test.dat <- combined.dat[combined.dat$Source == "Test", ]
 set.seed(621)
 
 # used randomForest to compare prediction based on my factors vs. actual survival 
-random.rf <- randomForest(factor(Survived) ~ Pclass + Sex + Age + Fare + Embarked + Title + FamilySize + Deck + 
-                            SexAdult + HaveCabin, data = train.dat)
+random.rf <- randomForest(factor(Survived) ~ Pclass + Sex + Age + Fare + Embarked + Title + FamilySize +
+                            MaleAdult + FemaleAdult + Child + Solo, data = train.dat)
 random.rf
 plot(random.rf, ylim=c(0,0.45))
 ```
