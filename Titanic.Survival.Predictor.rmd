@@ -1,0 +1,233 @@
+---
+title: 'Titanic: Machine Learning from Disaster'
+author: "Justin Robinette"
+date: "August 8, 2018"
+output: word_document
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(rpart)
+library(gridExtra)
+library(randomForest)
+```
+
+```{r}
+# loaded files
+train.dat <- read.csv("train.csv", stringsAsFactors = FALSE)
+test.dat <- read.csv("test.csv", stringsAsFactors = FALSE)
+head(train.dat)
+head(test.dat)
+
+# added column to determine whether data row was from "Train" or "Test" csv
+train.dat$Source <- "Train"
+test.dat$Source <- "Test"
+
+# combined the Train and Test files
+combined.dat <- bind_rows(train.dat, test.dat)
+```
+
+```{r}
+# taking a snapshot of data
+ggplot(train.dat, aes(x = Sex, fill = factor(Survived))) +  # gender played large role in survival
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+ggplot(train.dat, aes(x = Pclass, fill = factor(Survived))) +  # class 1 passengers were more likely to survive than not
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+ggplot(train.dat, aes(x = Embarked, fill = factor(Survived))) +  # passenges who embarked from 'C' were more likely to survive than not, 'Q' resulted in slightly less likely to survive than not and 'S' passengers were very unlikely to survive
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+```
+
+```{r}
+# create column for passenger's Title from their name
+combined.dat$Title <- gsub('.*, |\\..*', '', combined.dat$Name)  
+
+# reassign titles
+combined.dat$Title[combined.dat$Title == 'Mlle'] <- 'Miss' # 'Mlle' is French abbreviation for Mademoiselle - equivalent to 'Miss'
+combined.dat$Title[combined.dat$Title == 'Mme'] <- 'Mrs'  # 'Mme' is French abbreviation for Madame - equivalent to 'Mrs'
+combined.dat$Title[combined.dat$Title == 'Ms'] <- 'Miss'  
+
+# generate data frame showing frequency of each title
+aggregate(data.frame(count = combined.dat$Title), list(value = combined.dat$Title), length)
+
+# assign 'Noble' titles for titles with frequency of 8 or less
+noble.titles <- c('Capt', 'Col', 'Don', 'Dona', 'Dr', 'Jonkheer', 'Lady', 'Major', 'Rev', 'Sir', 'the Countess')
+combined.dat$Title[combined.dat$Title %in% noble.titles] <- 'Noble'
+table(combined.dat$Title)
+
+ggplot(combined.dat[1:891,], aes(x = Title, fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+```
+
+```{r}
+# add column for the traveling family size of each passenger
+combined.dat$FamilySize = combined.dat$SibSp + combined.dat$Parch + 1
+
+# we see that families of 2, 3, or 4 had better chance of survival and that most people were travelling solo
+ggplot(combined.dat[1:891,], aes(x = FamilySize, fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+```
+
+```{r}
+# convert missing Cabin values to NA
+combined.dat$Cabin[combined.dat$Cabin == ""] <- 'NA'
+combined.dat$Cabin <- as.factor(combined.dat$Cabin)
+
+# separate cabin into deck and number
+combined.dat$Deck <- gsub("\\d+|NA", "", combined.dat$Cabin)
+combined.dat$Deck <- substr(combined.dat$Deck, 1, 1)
+combined.dat$Deck[combined.dat$Deck==""] <- 'Unknown'
+
+# with exception of Deck 'A', everyone from each deck had a higher chance of survival
+# since we know most died, this leads me to believe that knowing the Cabin information increases the likelihood of survival
+ggplot(combined.dat[1:891,], aes(x = Deck, fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+```
+
+```{r}
+# since cabin number is not relevant, create column with 0 or 1 depending on if we have a value and drop Cabin column
+combined.dat$HaveCabin <- ifelse(combined.dat$Deck == 'Unknown',0,1)
+combined.dat$Cabin <- NULL
+
+# this confirms my belief that having Cabin information increases the likelihood of survival
+havecabin.xticks <- c('No', 'Yes')
+ggplot(combined.dat[1:891,], aes(x = factor(HaveCabin), fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(x = "Have Cabin Info", y = "Number of Passengers") +
+  scale_x_discrete(labels = havecabin.xticks)
+```
+
+```{r}
+# replace NA from 'Fare'
+na.fare <- subset(combined.dat, is.na(combined.dat$Fare))  # Pclass=3 / Embarked='S'
+
+# replace Fare value for Passenger 1044 with the average fare of passengers with Pclass=3 and Embarking from 'S'
+combined.dat$Fare[which(combined.dat$PassengerId==1044)] <- mean(combined.dat[combined.dat$Pclass=='3' & combined.dat$Embarked=='S', ]$Fare, na.rm = TRUE)
+```
+
+```{r}
+# replace NAs from 'Embarked'
+combined.dat$Embarked[combined.dat$Embarked==""] <- NA
+na.embarked <- subset(combined.dat, is.na(combined.dat$Embarked))
+
+# plotted the relationship between Embarking location and Fare with horizontal line showing price paid by 'na.embarked' passengers
+# my assumption based on this plot is these passengers Embarked from 'C'
+ggplot(na.omit(combined.dat), aes(Embarked, Fare, fill = factor(Pclass))) +
+  geom_boxplot() +
+  geom_hline(aes(yintercept=80), color="green")
+
+# updated the passengers to complete Embarked column
+combined.dat$Embarked[c(62, 830)] <- "C"
+```
+
+```{r}
+# distribution before imputed NAs
+agedist.before <-
+  ggplot(combined.dat, aes(x = Age)) +
+  geom_histogram(binwidth = 5) +
+  labs(x = "Age", y = "Number of Passengers", title = "Distribution of Age before Imputation")
+
+# used linear regression to impute missing age values
+set.seed(621)
+age.predict <- rpart(Age ~ Pclass + Sex + SibSp + Parch + Embarked + Title + FamilySize + Deck + HaveCabin,
+                  data = combined.dat[!is.na(combined.dat$Age),])
+combined.dat$Age[is.na(combined.dat$Age)] <- predict(age.predict, combined.dat[is.na(combined.dat$Age), ])
+combined.dat$Age <- as.integer(combined.dat$Age)
+
+# distribution after imputed NAs
+agedist.after <-
+  ggplot(combined.dat, aes(x = Age)) +
+  geom_histogram(binwidth = 5) +
+  labs(x = "Age", y = "Number of Passengers", title = "Distribution of Age after Imputation")
+
+grid.arrange(agedist.before, agedist.after, ncol = 1)
+```
+
+```{r}
+# added column for Adult or Child  / Male or Female 
+combined.dat$SexAdult[combined.dat$Age >= 18 & combined.dat$Sex == "female"] <- "Female Adult"
+combined.dat$SexAdult[combined.dat$Age >= 18 & combined.dat$Sex == "male"] <- "Male Adult"
+combined.dat$SexAdult[combined.dat$Age < 18 & combined.dat$Sex == "female"] <- "Female Child"
+combined.dat$SexAdult[combined.dat$Age < 18 & combined.dat$Sex == "male"] <- "Male Child"
+
+# we see male adults had the least chance of survival whereas female adults show the biggest difference in favor of survival
+ggplot(combined.dat[1:891,], aes(x = SexAdult, fill = factor(Survived))) +
+  geom_bar(stat = "count", position = "dodge") +
+  labs(y = "Number of Passengers")
+```
+
+```{r}
+#changed columns to factors for randomForest 
+combined.dat$Sex <- as.factor(combined.dat$Sex)
+combined.dat$Embarked <- as.factor(combined.dat$Embarked)
+combined.dat$Title <- as.factor(combined.dat$Title)
+combined.dat$Deck <- as.factor(combined.dat$Deck)
+combined.dat$SexAdult <- as.factor(combined.dat$SexAdult)
+```
+
+```{r}
+# split combined back up into "Train" and "Test"
+train.dat <- combined.dat[combined.dat$Source == "Train", ]
+test.dat <- combined.dat[combined.dat$Source == "Test", ]
+```
+
+```{r}
+set.seed(621)
+
+# used randomForest to compare prediction based on my factors vs. actual survival 
+random.rf <- randomForest(factor(Survived) ~ Pclass + Sex + Age + Fare + Embarked + Title + FamilySize + Deck + 
+                            SexAdult + HaveCabin, data = train.dat)
+random.rf
+plot(random.rf, ylim=c(0,0.45))
+```
+
+```{r}
+# determine the importance of each factor
+importance <- importance(random.rf)
+factor.importance <- data.frame(Variables = row.names(importance), 
+                            Importance = round(importance[ ,'MeanDecreaseGini'],2))
+
+# ranked the factors based on importance
+rank.importance <- factor.importance %>%
+  mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+
+# Use ggplot2 to visualize the relative importance of variables
+ggplot(rank.importance, aes(x = reorder(Variables, Importance), 
+    y = Importance, fill = Importance)) +
+  geom_bar(stat='identity') + 
+  geom_text(aes(x = Variables, y = 0.5, label = Rank),
+    hjust=0, vjust=0.55, size = 4, color = 'red') +
+  labs(x = 'Factors') +
+  coord_flip()
+```
+
+```{r}
+# set prediction using the predict function
+prediction <- predict(random.rf, test.dat)
+
+# prediction as a data frame (solution)
+solution <- data.frame(PassengerID = test.dat$PassengerId, Survived = prediction)
+
+# wrote file to csv for submission
+write.csv(solution, file = 'test_solution.csv', row.names = F)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
